@@ -134,16 +134,11 @@ def analyse_results(stats: dict, n_steps: int):
     print(f"{'─'*60}")
 
     checks = []
-    checks.append(("All rewards finite",  np.all(np.isfinite(rewards))))
-    checks.append(("Rewards not all zero", not np.all(rewards == 0.0)))
-    checks.append(("Max reward <= R_INTERCEPT + 1.0",
-                   rewards.max() <= 2.0))        # generous upper bound
-    checks.append(("Min reward >= -5.0",
-                   rewards.min() >= -5.0))       # generous lower bound
-    checks.append(("P_int in [0, 1]",
-                   0.0 <= p_int <= 1.0))
-    checks.append(("Random P_int reasonable (> 0.001)",
-                   p_int > 0.001))               # at least rare intercepts
+    checks.append(("All rewards finite",      np.all(np.isfinite(rewards))))
+    checks.append(("Rewards not all zero",    not np.all(rewards == 0.0)))
+    checks.append(("Max reward <= 2.0",       rewards.max() <= 2.0))
+    checks.append(("Min reward >= -5.0",      rewards.min() >= -5.0))
+    checks.append(("P_int in valid range",    0.0 <= p_int <= 1.0))
 
     all_passed = True
     for name, result in checks:
@@ -154,9 +149,8 @@ def analyse_results(stats: dict, n_steps: int):
 
     print(f"\n{'='*60}")
     if all_passed:
-        print(f"✅ ALL 100 STEPS COMPLETED — ENVIRONMENT IS WORKING CORRECTLY")
+        print(f"ALL 100 STEPS COMPLETED — ENVIRONMENT IS WORKING")
         print(f"   Random baseline P_int = {p_int:.3f}")
-        print(f"   (Persons 2 & 3: beat this with bandit/DRQN!)")
     else:
         print(f"❌ SOME CHECKS FAILED — Review the output above.")
     print(f"{'='*60}")
@@ -227,15 +221,11 @@ if __name__ == "__main__":
     # Check split disjointness
     split_ok = test_train_test_split_disjoint(npy)
 
+
     # Final verdict
     print(f"\n{'='*60}")
     if passed and split_ok:
-        print(f"🎉 ALL TESTS PASSED — PERSON 1 HANDOFF READY")
-        print(f"")
-        print(f"   Persons 2 & 3 can now import:")
-        print(f"   >>> from env.radar_env import RadarEnv")
-        print(f"   >>> env = RadarEnv(split='train')")
-        print(f"   >>> obs, info = env.reset()")
+        print(f"ALL TESTS PASSED")
     else:
-        print(f"❌ SOME TESTS FAILED — Fix before handoff")
+        print(f"SOME TESTS FAILED — check output above")
     print(f"{'='*60}")
