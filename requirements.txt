@@ -1,0 +1,8 @@
+numpy>=1.24
+pandas>=2.0
+pyarrow>=12.0        # read/write parquet files
+h5py>=3.8            # read HDF5 files from the TSRD dataset
+gymnasium>=0.29
+torch>=2.0
+huggingface_hub>=0.20
+tqdm>=4.66

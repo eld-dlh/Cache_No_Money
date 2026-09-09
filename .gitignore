@@ -1,0 +1,15 @@
+# Ignore raw data (can be multi-GB)
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# HuggingFace cache
+.cache/
