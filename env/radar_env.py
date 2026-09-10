@@ -96,7 +96,7 @@ from env.memmap_loader import PDWMemmap
 # Channel design
 N_CHANNELS = 64      # Number of discrete frequency channels (Step 6)
 FREQ_MIN   = 0       # MHz — actual dataset min ~4.7 MHz (use 0 for clean bucket edges)
-FREQ_MAX   = 12_000  # MHz — actual dataset max ~11,990 MHz
+FREQ_MAX   = 18_000  # MHz — actual dataset max ~16,064 MHz
 
 # Observation window
 WINDOW_SIZE = 10     # How many past pulses the agent sees as its state
