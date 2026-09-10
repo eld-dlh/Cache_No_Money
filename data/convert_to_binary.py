@@ -30,7 +30,12 @@ Record layout (32 bytes = 8 × float32):
   [7]  reserved_2   (zero)  — could store train_id later
 """
 
+import sys
 from pathlib import Path
+
+# Fix Windows terminal encoding
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 import pandas as pd
@@ -89,6 +94,9 @@ def convert_to_binary(
         if "train_id" in meta_df.columns:
             train_ids = meta_df["train_id"].values.astype(np.float32)
             print(f"   Including train_id in reserved field [6]")
+    elif "train_id" in pdw_df.columns:
+        train_ids = pdw_df["train_id"].values.astype(np.float32)
+        print(f"   Including train_id from pdw_parsed in reserved field [6]")
 
     # Allocate the full output array in memory
     # Shape: (N, 8) — N records, 8 float32 values each

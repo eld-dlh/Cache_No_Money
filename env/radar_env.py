@@ -79,9 +79,14 @@ STEP 9: 70/30 Train/Test Split
 
 from __future__ import annotations
 
+import sys
 import warnings
 from pathlib import Path
 from typing import Any
+
+# Fix Windows terminal encoding
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 import gymnasium as gym

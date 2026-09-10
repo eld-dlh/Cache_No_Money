@@ -26,6 +26,10 @@ Frequency range in the dataset: ~100 MHz – 18000 MHz (based on dataset docs)
 import sys
 from pathlib import Path
 
+# Fix Windows terminal encoding
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import h5py
 import numpy as np
 import pandas as pd
