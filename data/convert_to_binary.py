@@ -48,7 +48,6 @@ PDW_COLS = ["ToA", "Frequency", "PulseWidth", "AoA", "Amplitude"]
 
 def convert_to_binary(
     pdw_parquet: Path = RAW_DIR / "pdw_parsed.parquet",
-    meta_parquet: Path | None = None,
     output_path: Path = OUT_FILE,
     chunk_size: int = 100_000,
 ) -> Path:
@@ -59,7 +58,6 @@ def convert_to_binary(
 
     Args:
         pdw_parquet:  Path to the parsed PDW parquet (from Step 2)
-        meta_parquet: Optional path to metadata parquet (for emitter_id in field [6])
         output_path:  Where to write the .npy file
         chunk_size:   How many rows to process at a time
 
@@ -82,13 +80,17 @@ def convert_to_binary(
     N = len(pdw_df)
     print(f"   {N:,} pulses to convert")
 
-    # Optionally load metadata
+    # Check if train_id is present
     train_ids = None
-    if meta_parquet and Path(meta_parquet).exists():
-        meta_df   = pd.read_parquet(meta_parquet)
-        if "train_id" in meta_df.columns:
-            train_ids = meta_df["train_id"].values.astype(np.float32)
-            print(f"   Including train_id in reserved field [6]")
+    if "train_id" in pdw_df.columns:
+        train_ids = pdw_df["train_id"].values.astype(np.float32)
+        print(f"   Found train_id column — will store in field [6]")
+
+    # Check if emitter_id is present (Required)
+    if "emitter_id" not in pdw_df.columns:
+        raise ValueError("Missing 'emitter_id' column in input Parquet. Required for NPY field [7].")
+    emitter_ids = pdw_df["emitter_id"].values.astype(np.float32)
+    print(f"   Found emitter_id column — will store in field [7]")
 
     # Allocate the full output array in memory
     # Shape: (N, 8) — N records, 8 float32 values each
@@ -102,9 +104,12 @@ def convert_to_binary(
     for i, col in enumerate(tqdm(PDW_COLS, desc="   Columns")):
         data[:, i] = pdw_df[col].values.astype(np.float32)
 
-    # Fill reserved field [6] with train_id if available
+    # Fill field [6] with train_id if available
     if train_ids is not None:
         data[:, 6] = train_ids[:N]
+        
+    # Fill field [7] with emitter_id
+    data[:, 7] = emitter_ids[:N]
 
     # Validate — check for NaN/Inf that would corrupt the binary
     bad_mask = ~np.isfinite(data[:, :5])
@@ -138,7 +143,9 @@ def convert_to_binary(
     print(f"   [2] PulseWidth   = {loaded[0,2]:.4g} µs")
     print(f"   [3] AoA          = {loaded[0,3]:.4g}°")
     print(f"   [4] Amplitude    = {loaded[0,4]:.4g} dBm")
-    print(f"   [5-7] reserved   = {loaded[0,5:8]}")
+    print(f"   [5] reserved     = {loaded[0,5]}")
+    print(f"   [6] train_id     = {loaded[0,6]}")
+    print(f"   [7] emitter_id   = {loaded[0,7]}")
 
     return output_path
 

@@ -1,0 +1,54 @@
+ROBUSTNESS EXPERIMENT RESULTS
+=============================
+
+1. Results by Window
+--------------------
+
+Window Seed: 42
+Ground Truth: Top Channel 17 contained 47.9% of pulses.
+  Random         :   1.62% hits
+  Sequential     :   1.57% hits
+  Epsilon-Greedy :  43.53% hits
+  UCB1           :  60.42% hits
+  SW-UCB         :  69.82% hits
+
+Window Seed: 123
+Ground Truth: Top Channel 17 contained 52.7% of pulses.
+  Random         :   1.52% hits
+  Sequential     :   1.56% hits
+  Epsilon-Greedy :  47.11% hits
+  UCB1           :  57.12% hits
+  SW-UCB         :  61.74% hits
+
+Window Seed: 456
+Ground Truth: Top Channel 11 contained 28.6% of pulses.
+  Random         :   1.57% hits
+  Sequential     :   1.43% hits
+  Epsilon-Greedy :  13.71% hits
+  UCB1           :  36.25% hits
+  SW-UCB         :  46.18% hits
+
+Window Seed: 789
+Ground Truth: Top Channel 11 contained 22.4% of pulses.
+  Random         :   1.50% hits
+  Sequential     :   1.68% hits
+  Epsilon-Greedy :  16.11% hits
+  UCB1           :  30.13% hits
+  SW-UCB         :  46.98% hits
+
+Window Seed: 999
+Ground Truth: Top Channel 11 contained 25.3% of pulses.
+  Random         :   1.51% hits
+  Sequential     :   1.54% hits
+  Epsilon-Greedy :  22.34% hits
+  UCB1           :  40.61% hits
+  SW-UCB         :  55.16% hits
+
+
+2. Aggregate Performance (Mean ± Std Dev)
+-----------------------------------------
+  SW-UCB         :  55.98% ± 10.03%  (Range:  46.2% -  69.8%)
+  UCB1           :  44.90% ± 13.25%  (Range:  30.1% -  60.4%)
+  Epsilon-Greedy :  28.56% ± 15.67%  (Range:  13.7% -  47.1%)
+  Sequential     :   1.56% ±  0.09%  (Range:   1.4% -   1.7%)
+  Random         :   1.54% ±  0.05%  (Range:   1.5% -   1.6%)
