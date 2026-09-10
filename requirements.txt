@@ -1,8 +1,20 @@
+# Core numerical & scientific computing
 numpy>=1.24
 pandas>=2.0
 pyarrow>=12.0        # read/write parquet files
 h5py>=3.8            # read HDF5 files from the TSRD dataset
+scipy>=1.10
+
+# Reinforcement Learning & Deep Learning
 gymnasium>=0.29
 torch>=2.0
+
+# Dataset & HuggingFace
 huggingface_hub>=0.20
+
+# Visualization & Progress
+matplotlib>=3.7
 tqdm>=4.66
+
+# Testing
+pytest>=7.0
