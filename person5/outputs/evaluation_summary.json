@@ -1,0 +1,68 @@
+{
+  "benchmark_metadata": {
+    "n_episodes": 100,
+    "max_steps": 500,
+    "seed": 42,
+    "n_channels": 64
+  },
+  "results": {
+    "sequential_sweeper": {
+      "mean_p_int": 1.42,
+      "std_p_int": 0.52,
+      "mean_reward": -369.35,
+      "relative_improvement_pct": 0.0
+    },
+    "sw_ucb": {
+      "mean_p_int": 1.84,
+      "std_p_int": 0.69,
+      "mean_reward": -366.2,
+      "relative_improvement_pct": 28.93
+    },
+    "hybrid_drqn": {
+      "mean_p_int_train": 3.16,
+      "mean_p_int_test": 1.39,
+      "std_p_int": 6.07,
+      "mean_reward": -330.8,
+      "relative_improvement_pct": 121.91,
+      "generalization_gap": 1.77
+    }
+  },
+  "snr_robustness": [
+    {
+      "dropout_rate": 0.0,
+      "snr_condition": "100% SNR",
+      "drqn_p_int": 4.369999999999999,
+      "swucb_p_int": 1.7099999999999997
+    },
+    {
+      "dropout_rate": 0.1,
+      "snr_condition": "90% SNR",
+      "drqn_p_int": 0.21114353340975964,
+      "swucb_p_int": 1.882769306594519
+    },
+    {
+      "dropout_rate": 0.2,
+      "snr_condition": "80% SNR",
+      "drqn_p_int": 1.987223120171291,
+      "swucb_p_int": 1.8391962004682854
+    },
+    {
+      "dropout_rate": 0.3,
+      "snr_condition": "70% SNR",
+      "drqn_p_int": 0.7220507426065281,
+      "swucb_p_int": 1.7826068151472776
+    },
+    {
+      "dropout_rate": 0.4,
+      "snr_condition": "60% SNR",
+      "drqn_p_int": 0.7188490772112348,
+      "swucb_p_int": 1.6847100778620583
+    },
+    {
+      "dropout_rate": 0.5,
+      "snr_condition": "50% SNR",
+      "drqn_p_int": 0.7311666204990178,
+      "swucb_p_int": 1.6787606039301857
+    }
+  ]
+}
