@@ -188,7 +188,68 @@ def test_train_test_split_disjoint(npy_path: Path = DEFAULT_NPY):
     train_env.close()
     test_env.close()
 
-    return len(overlap) == 0
+    assert len(overlap) == 0, f"Splits overlap by {len(overlap)} records!"
+
+
+def test_random_agent_100_steps(npy_path: Path = DEFAULT_NPY):
+    """Run 100 steps of random agent and assert all environment checks pass."""
+    stats = run_random_agent(npy_path, n_steps=100, seed=42, verbose=False)
+    passed = analyse_results(stats, n_steps=100)
+    assert passed, "Random agent sanity checks failed!"
+
+
+def test_radar_env_episode_lifecycle(npy_path: Path = DEFAULT_NPY):
+    """Test RadarEnv lifecycle: seed reproducibility, reward bounds, and truncation at MAX_STEPS."""
+    env1 = RadarEnv(npy_path, split="train", seed=123)
+    obs1, info1 = env1.reset(seed=123)
+
+    env2 = RadarEnv(npy_path, split="train", seed=123)
+    obs2, info2 = env2.reset(seed=123)
+
+    assert np.allclose(obs1, obs2), "Reset with same seed must return identical observations"
+    assert info1["start_index"] == info2["start_index"], "Same seed must yield same start_index"
+
+    # Step until truncation (MAX_STEPS = 500)
+    step_count = 0
+    done = False
+    while not done:
+        action = env1.action_space.sample()
+        obs, reward, terminated, truncated, info = env1.step(action)
+        step_count += 1
+        assert obs.shape == (WINDOW_SIZE, 5), f"Invalid obs shape: {obs.shape}"
+        assert -5.0 <= reward <= 2.0, f"Reward out of bounds: {reward}"
+        assert 0 <= info["pulse_channel"] < N_CHANNELS
+        assert 0 <= info["chosen_channel"] < N_CHANNELS
+        done = terminated or truncated
+
+    assert truncated, "Episode must truncate after reaching MAX_STEPS"
+    assert step_count == 500, f"Expected 500 steps before truncation, got {step_count}"
+    env1.close()
+    env2.close()
+
+
+def test_memmap_and_pdw_dataset(npy_path: Path = DEFAULT_NPY):
+    """Test PDWMemmap low-level loader and PDWDataset PyTorch sliding window integration."""
+    from env.memmap_loader import PDWMemmap
+    from env.pdw_dataset import PDWDataset
+    from torch.utils.data import DataLoader
+
+    loader = PDWMemmap(npy_path)
+    assert len(loader) > 0, "PDWMemmap should have records"
+    record = loader.get_record(0)
+    assert record.shape == (8,), f"Expected shape (8,), got {record.shape}"
+    batch = loader.get_batch(0, 16)
+    assert batch.shape == (16, 8), f"Expected shape (16, 8), got {batch.shape}"
+
+    dataset = PDWDataset(npy_path, window_size=10, start_idx=0, end_idx=1000)
+    assert len(dataset) == 1000 - 10 + 1, f"Unexpected dataset length: {len(dataset)}"
+    sample = dataset[0]
+    assert sample.shape == (10, 5), f"Sample shape must be (10, 5), got {sample.shape}"
+
+    # Verify PyTorch DataLoader integration
+    dl = DataLoader(dataset, batch_size=8, shuffle=False)
+    batch_tensor = next(iter(dl))
+    assert batch_tensor.shape == (8, 10, 5), f"Batched shape must be (8, 10, 5), got {batch_tensor.shape}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

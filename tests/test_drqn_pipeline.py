@@ -1,12 +1,9 @@
 """
-tests/test_drqn_pipeline.py — Full Unit Tests for Person 3 (Tier 2 DRQN)
-==========================================================================
+tests/test_drqn_pipeline.py — Full Unit & Hardening Tests for Person 3 (Tier 2 DRQN)
+=====================================================================================
 
 This test suite validates ALL Person 3 components end-to-end using
-synthetic data only — no dataset download required. Run this locally
-before pushing to GitHub to catch any issues.
-
-What we check:
+synthetic data and production artifacts:
   ✅ DRQNNetwork forward pass: (1, 10, 5) → valid action in [0, 63]
   ✅ LSTM hidden state persistence across steps
   ✅ LSTM hidden state reset to zeros
@@ -15,12 +12,27 @@ What we check:
   ✅ StateBuilder: all outputs normalised to [0, 1]
   ✅ Pattern-lock trigger fires on cyclic sequences
   ✅ Fallback trigger fires on consecutive misses
+  ✅ No false pattern-locks on uniform random noise
   ✅ Checkpoint save/load roundtrip
   ✅ Epsilon decay schedule correctness
   ✅ Full mini-episode integration test
+  ✅ Parameter count sanity check (960,385 parameters)
+  ✅ Production checkpoint validation (drqn_radar_best.pt)
+  ✅ Real-time SDR inference latency (< 5ms deadline)
+  ✅ Edge cases & numerical robustness (clamping, zero-padding)
+  ✅ Handoff controller cooldown & anti-oscillation
+  ✅ Multi-batch parallel inference (M-receiver SDR)
+  ✅ Dueling architecture mathematical invariant (V(s) + A(s,a) - mean(A))
+  ✅ Replay buffer capacity overflow & FIFO overwrite
+  ✅ Target network isolation & Polyak soft sync (tau)
+  ✅ Hardware sensor NaN & Inf dropout immunity
+  ✅ Handoff re-acquisition & multi-period dynamics (P in [3, 8])
+  ✅ CognitiveInterceptor unified production API (Person 4 handoff contract)
+  ✅ Deterministic policy evaluation invariance
 
 Usage:
     python tests/test_drqn_pipeline.py
+    pytest tests/ -v
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # ── Fix Windows terminal encoding (cp1252 can't handle Unicode symbols)
@@ -45,6 +58,7 @@ from models.drqn_network import DRQNNetwork
 from models.replay_buffer import RecurrentReplayBuffer
 from models.drqn_agent import DRQNAgent
 from models.handoff_controller import HandoffController
+from models.cognitive_interceptor import CognitiveInterceptor
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TEST INFRASTRUCTURE
@@ -54,9 +68,11 @@ PASS_COUNT = 0
 FAIL_COUNT = 0
 
 
-def test(name: str):
+def test(name: str = ""):
     """Decorator-like printer for test sections."""
     print(f"\n── {name}")
+
+test.__test__ = False
 
 
 def check(condition: bool, msg: str):
@@ -68,6 +84,7 @@ def check(condition: bool, msg: str):
     else:
         FAIL_COUNT += 1
         print(f"   ❌ FAILED: {msg}")
+        assert condition, msg
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -625,6 +642,420 @@ def test_parameter_count():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TEST 13: PRODUCTION CHECKPOINT VALIDATION (drqn_radar_best.pt)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_production_checkpoint():
+    test("Test 13: Production Checkpoint Validation (drqn_radar_best.pt)")
+
+    ckpt_path = Path("checkpoints/drqn_radar_best.pt")
+    check(ckpt_path.exists(), f"Production checkpoint exists at {ckpt_path}")
+
+    if ckpt_path.exists():
+        agent = DRQNAgent(n_actions=64, device="cpu")
+        ckpt = agent.load(ckpt_path, load_optimiser=False)
+
+        check("model_state_dict" in ckpt, "Checkpoint contains 'model_state_dict' state dict")
+        check("config" in ckpt, "Checkpoint contains 'config' metadata")
+        check("training_state" in ckpt, "Checkpoint contains 'training_state'")
+
+        eval_reward = ckpt.get("eval_reward")
+        if eval_reward is None and "training_state" in ckpt:
+            eval_reward = ckpt["training_state"].get("best_eval_reward")
+
+        check(
+            eval_reward is not None and np.isfinite(eval_reward),
+            f"Recorded eval_reward is valid: {eval_reward}"
+        )
+
+        # Run inference test with loaded weights
+        sb = StateBuilder(n_channels=64, max_steps=500)
+        dummy_obs = np.random.uniform(0.0, 1.0, size=(10, 5)).astype(np.float32)
+        dummy_info = {"intercepted": False, "chosen_channel": 0, "pulse_channel": 0, "step": 1}
+        state = sb.build_state(dummy_obs, dummy_info)
+
+        action, _ = agent.select_action(state, hidden=None, evaluate=True)
+        check(0 <= action < 64, f"Production model produces valid action {action} in [0, 63]")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 14: REAL-TIME INFERENCE LATENCY & SDR DEADLINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_inference_latency():
+    test("Test 14: Real-Time Inference Latency & SDR Deadline (< 5ms)")
+
+    agent = DRQNAgent(n_actions=64, device="cpu")
+    agent.set_eval_mode()
+    sb = StateBuilder(n_channels=64, max_steps=500)
+
+    dummy_obs = np.random.uniform(0.0, 1.0, size=(10, 5)).astype(np.float32)
+    dummy_info = {"intercepted": False, "chosen_channel": 0, "pulse_channel": 0, "step": 1}
+    state = sb.build_state(dummy_obs, dummy_info)
+
+    # Warmup
+    for _ in range(10):
+        agent.select_action(state, hidden=None, evaluate=True)
+
+    latencies = []
+    for _ in range(100):
+        t0 = time.perf_counter()
+        action, _ = agent.select_action(state, hidden=None, evaluate=True)
+        latencies.append((time.perf_counter() - t0) * 1000.0)  # ms
+
+    avg_latency = float(np.mean(latencies))
+    p95_latency = float(np.percentile(latencies, 95))
+
+    check(avg_latency < 5.0, f"Average inference latency {avg_latency:.2f} ms < 5.0 ms target")
+    check(p95_latency < 15.0, f"P95 inference latency {p95_latency:.2f} ms < 15.0 ms ceiling")
+    print(f"   Avg: {avg_latency:.2f} ms | P95: {p95_latency:.2f} ms | Max: {max(latencies):.2f} ms")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 15: EDGE CASES & NUMERICAL ROBUSTNESS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_edge_cases_and_robustness():
+    test("Test 15: Edge Cases & Numerical Robustness")
+
+    sb = StateBuilder(n_channels=64, max_steps=500)
+    agent = DRQNAgent(n_actions=64, device="cpu")
+    agent.set_eval_mode()
+
+    # Edge Case 1: All-zeros observation (step 0 before any pulse arrives)
+    zero_obs = np.zeros((10, 5), dtype=np.float32)
+    state_zero = sb.build_state(zero_obs, {"intercepted": False, "chosen_channel": 0, "pulse_channel": 0, "step": 0})
+    check(torch.all(torch.isfinite(state_zero["sequence"])), "Zero-obs sequence contains no NaN/Inf")
+    check(torch.all(torch.isfinite(state_zero["context"])), "Zero-obs context contains no NaN/Inf")
+    a_zero, _ = agent.select_action(state_zero, hidden=None, evaluate=True)
+    check(0 <= a_zero < 64, f"Zero-obs produces valid action: {a_zero}")
+
+    # Edge Case 2: Extreme Out-of-Bounds Values (Extreme freq, massive ToA, clipping amp)
+    extreme_obs = np.array([
+        [1e8, 25000.0, 100.0, 450.0, 50.0],
+        [0.0, -500.0, -10.0, -50.0, -150.0],
+    ] * 5, dtype=np.float32)
+    state_extreme = sb.build_state(extreme_obs, {"intercepted": True, "chosen_channel": 63, "pulse_channel": 63, "step": 500})
+    check(torch.all((state_extreme["sequence"] >= 0.0) & (state_extreme["sequence"] <= 1.0)), "Extreme values clamped safely to [0, 1]")
+    check(torch.all((state_extreme["context"] >= 0.0) & (state_extreme["context"] <= 1.0)), "Extreme context clamped safely to [0, 1]")
+    a_extreme, _ = agent.select_action(state_extreme, hidden=None, evaluate=True)
+    check(0 <= a_extreme < 64, f"Extreme-obs produces valid action: {a_extreme}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 16: HANDOFF CONTROLLER COOLDOWN & ANTI-OSCILLATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_handoff_cooldown():
+    test("Test 16: Handoff Controller Cooldown & Anti-Oscillation")
+
+    hc = HandoffController(
+        pattern_lock_threshold=4,
+        fallback_threshold=3,
+        cooldown_steps=10,
+    )
+
+    # Trigger pattern lock with repeating sequence
+    seq = [10, 20, 30] * 5
+    for ch in seq:
+        hc.update(intercepted=True, channel=ch)
+
+    check(hc.current_tier == 2, f"Tier 2 locked after pattern, got Tier {hc.current_tier}")
+
+    # Now deliver 3 misses during cooldown (cooldown_steps=10)
+    # Even though fallback_threshold=3, cooldown MUST prevent immediate fallback
+    for _ in range(3):
+        hc.update(intercepted=False)
+
+    check(hc.current_tier == 2, "Cooldown prevented premature fallback on transient misses")
+
+    # Step through remaining cooldown steps
+    for _ in range(8):
+        hc.update(intercepted=False)
+
+    # After cooldown expires, accumulated misses must trigger fallback
+    check(hc.current_tier == 1, f"Fallback correctly triggered after cooldown expired: Tier {hc.current_tier}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 17: MULTI-BATCH PARALLEL INFERENCE (M-RECEIVER SDR)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_multi_batch_inference():
+    test("Test 17: Multi-Batch Parallel Forward Pass (M-Receiver SDR)")
+
+    net = DRQNNetwork(
+        input_dim=5, context_dim=5, feature_dim=128,
+        hidden_dim=256, n_layers=2, n_actions=64,
+    )
+    net.eval()
+
+    # Test batches: 1 (single SDR), 4 (quad-receiver PPO spec), 16 (parallel channels)
+    for B in [1, 4, 16]:
+        seq_batch = torch.rand(B, 10, 5)
+        ctx_batch = torch.rand(B, 5)
+        q_vals, hidden = net(seq_batch, ctx_batch, None)
+
+        check(q_vals.shape == (B, 64), f"Batch {B}: Q-values shape (B, 64), got {q_vals.shape}")
+        check(torch.all(torch.isfinite(q_vals)), f"Batch {B}: All Q-values finite")
+        check(hidden[0].shape == (2, B, 256), f"Batch {B}: Hidden state h shape correct")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 18: DUELING ARCHITECTURE MATHEMATICAL INVARIANT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_dueling_architecture_invariant():
+    test("Test 18: Dueling Architecture Mathematical Invariant (V(s) + A(s,a) - mean(A))")
+
+    net = DRQNNetwork(input_dim=5, context_dim=5, n_actions=64)
+    net.eval()
+
+    seq = torch.randn(4, 10, 5)
+    ctx = torch.randn(4, 5)
+
+    # Forward pass
+    q_values, _ = net(seq, ctx)
+
+    # Check forward pass Q-values
+    check(q_values.shape == (4, 64), f"Q-values shape (4, 64), got {q_values.shape}")
+
+    # Manually compute V and A through the streams
+    features = net.feature_extractor(seq)
+    lstm_out, _ = net.lstm(features)
+    combined = torch.cat([lstm_out[:, -1, :], ctx], dim=-1)
+    v_stream = net.value_stream(combined)  # (4, 1)
+    a_stream = net.advantage_stream(combined)  # (4, 64)
+
+    # Identifiability property: mean(Q(s, ·)) == V(s)
+    expected_v = q_values.mean(dim=-1, keepdim=True)
+    check(
+        torch.allclose(expected_v, v_stream, atol=1e-5),
+        "Mean Q-value across all actions exactly equals state value V(s)"
+    )
+
+    # Advantage centering: (A(s, a) - mean(A)) has mean zero
+    centered_adv = a_stream - a_stream.mean(dim=-1, keepdim=True)
+    check(
+        torch.allclose(centered_adv.mean(dim=-1), torch.zeros(4), atol=1e-6),
+        "Mean centered advantage across actions is zero"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 19: REPLAY BUFFER OVERFLOW, CIRCULAR FIFO & CAPACITY BOUNDS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_replay_buffer_overflow_and_bounds():
+    test("Test 19: Replay Buffer Capacity Overflow & Boundary Conditions")
+
+    # Small capacity buffer
+    buffer = RecurrentReplayBuffer(capacity=3, chunk_len=8, window_size=10, context_dim=5)
+
+    # Add 10 episodes (capacity is 3, so 7 oldest must be overwritten cleanly)
+    for ep in range(10):
+        for step in range(15):
+            buffer.add_transition(
+                obs_seq=np.full((10, 5), ep, dtype=np.float32),
+                context=np.full(5, ep, dtype=np.float32),
+                action=ep % 64,
+                reward=float(ep),
+                done=(step == 14),
+            )
+        buffer.end_episode()
+
+    check(len(buffer) == 3, f"Buffer length clamped to capacity 3: got {len(buffer)}")
+    check(buffer.can_sample(3), "Can sample batch of capacity size (3)")
+    check(not buffer.can_sample(4), "Cannot sample batch larger than buffer (4)")
+
+    # Sample a batch of 3
+    batch = buffer.sample(3, device="cpu")
+    check(batch["obs_seq"].shape == (3, 8, 10, 5), "Sampled batch from wrapped buffer has valid shape")
+
+    # Verify exception when sampling too many episodes
+    raised_val_error = False
+    try:
+        buffer.sample(4)
+    except ValueError:
+        raised_val_error = True
+    check(raised_val_error, "Sampling beyond capacity cleanly raises ValueError")
+
+    # Exact boundary condition: episode length exactly chunk_len (8 steps)
+    buf2 = RecurrentReplayBuffer(capacity=2, chunk_len=8)
+    for s in range(8):
+        buf2.add_transition(np.zeros((10, 5), dtype=np.float32), np.zeros(5, dtype=np.float32), 0, 1.0, (s == 7))
+    buf2.end_episode()
+    check(len(buf2) == 1, "Episode with length exactly equal to chunk_len is retained")
+    b2 = buf2.sample(1)
+    check(b2["obs_seq"].shape == (1, 8, 10, 5), "Sample from exact-chunk episode succeeded")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 20: TARGET NETWORK ISOLATION & POLYAK SOFT SYNC
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_target_network_isolation_and_polyak():
+    test("Test 20: Target Network Isolation & Polyak Soft Sync")
+
+    agent = DRQNAgent(n_actions=64, device="cpu")
+    agent.sync_target()
+
+    # Verify parameters match after sync
+    p_main = list(agent.q_network.parameters())[0]
+    p_target = list(agent.target_network.parameters())[0]
+    check(torch.allclose(p_main, p_target), "Target network parameters match main network after sync")
+
+    # Mutate main network in-place: target network MUST NOT change (no shared memory)
+    with torch.no_grad():
+        p_main.add_(10.0)
+
+    check(not torch.allclose(p_main, p_target), "Target network unaffected by in-place mutation of main network")
+
+    # Test Polyak soft sync: θ⁻ ← τ·θ + (1-τ)·θ⁻
+    tau = 0.2
+    target_before = p_target.clone()
+    main_current = p_main.clone()
+    expected_target = tau * main_current + (1.0 - tau) * target_before
+
+    agent.soft_sync_target(tau=tau)
+    p_target_after = list(agent.target_network.parameters())[0]
+
+    check(
+        torch.allclose(p_target_after, expected_target, atol=1e-5),
+        f"Polyak soft sync matches analytical formula (tau={tau})"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 21: HARDWARE SENSOR NaN & INF IMMUNITY (ROBUSTNESS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_sensor_nan_inf_immunity():
+    test("Test 21: Hardware Sensor NaN & Inf Dropout Immunity")
+
+    sb = StateBuilder(n_channels=64, max_steps=500)
+    agent = DRQNAgent(n_actions=64, device="cpu")
+    agent.set_eval_mode()
+
+    # Create corrupt observation full of NaNs, +Infs, -Infs from sensor failure
+    corrupt_obs = np.array([
+        [np.nan, np.nan, np.nan, np.nan, np.nan],
+        [np.inf, np.inf, np.inf, np.inf, np.inf],
+        [-np.inf, -np.inf, -np.inf, -np.inf, -np.inf],
+    ] * 3 + [[np.nan, 5000.0, 2.5, 45.0, -30.0]], dtype=np.float32)
+
+    corrupt_info = {
+        "intercepted": False,
+        "chosen_channel": 0,
+        "pulse_channel": 0,
+        "step": 1,
+    }
+
+    state = sb.build_state(corrupt_obs, corrupt_info)
+
+    check(torch.all(torch.isfinite(state["sequence"])), "Sanitized sequence contains no NaNs or Infs")
+    check(torch.all(torch.isfinite(state["context"])), "Sanitized context contains no NaNs or Infs")
+    check(state["sequence"].min() >= 0.0 and state["sequence"].max() <= 1.0, "Corrupt obs bounded strictly in [0, 1]")
+    check(state["context"].min() >= 0.0 and state["context"].max() <= 1.0, "Corrupt context bounded strictly in [0, 1]")
+
+    action, _ = agent.select_action(state, hidden=None, evaluate=True)
+    check(0 <= action < 64, f"Corrupt input still yields valid channel action: {action}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 22: HANDOFF RE-ACQUISITION & MULTI-PERIOD DYNAMICS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_handoff_multi_period_and_reacquisition():
+    test("Test 22: Handoff Re-acquisition & Multi-Period Dynamics")
+
+    ctrl = HandoffController(
+        pattern_lock_threshold=5,
+        fallback_threshold=4,
+        cooldown_steps=2,
+    )
+
+    # 1. Pattern with period 4: [5, 15, 25, 35]
+    p4 = [5, 15, 25, 35]
+    for step in range(25):
+        ctrl.update(intercepted=True, channel=p4[step % 4])
+
+    check(ctrl.current_tier == 2, "Controller locked on period-4 hopping pattern")
+    check(ctrl.detected_period == 4, f"Detected period is 4, got {ctrl.detected_period}")
+
+    # 2. Emitter changes tactic / Jammer disrupts: 6 consecutive misses
+    for _ in range(6):
+        ctrl.update(intercepted=False)
+
+    check(ctrl.current_tier == 1, "Controller successfully fell back to Tier 1 upon pattern break")
+    check(not ctrl.pattern_locked, "Pattern lock cleared after fallback")
+
+    # 3. Re-acquisition: Emitter settles on new pattern of period 5: [2, 12, 22, 32, 42]
+    p5 = [2, 12, 22, 32, 42]
+    for step in range(30):
+        ctrl.update(intercepted=True, channel=p5[step % 5])
+
+    check(ctrl.current_tier == 2, "Controller re-acquired pattern lock on new frequency pattern")
+    check(ctrl.detected_period == 5, f"Detected period is 5, got {ctrl.detected_period}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 23: COGNITIVE INTERCEPTOR API (PERSON 4 HANDOFF CONTRACT)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_cognitive_interceptor_api():
+    test("Test 23: CognitiveInterceptor Unified Production API (Person 4)")
+
+    ckpt_path = "checkpoints/drqn_radar_best.pt"
+    interceptor = CognitiveInterceptor(weights_path=ckpt_path)
+
+    check(interceptor.weights_loaded, "CognitiveInterceptor successfully loaded production checkpoint")
+    check(interceptor.current_tier == 1, "Interceptor initialises in Tier 1 (reactive bandit)")
+    check(interceptor.consecutive_misses == 0, "Initial consecutive misses is 0")
+
+    # Simulate 20 real-time SDR steps
+    actions = []
+    dummy_obs = np.random.uniform(0.0, 1.0, size=(10, 5)).astype(np.float32)
+    dummy_info = {"intercepted": False, "chosen_channel": 0, "pulse_channel": 0, "step": 0}
+
+    for step in range(20):
+        ch = interceptor.predict_channel(dummy_obs, dummy_info)
+        actions.append(ch)
+        event = interceptor.update_feedback(reward=1.0, intercepted=True, pulse_channel=ch)
+        dummy_info["chosen_channel"] = ch
+        dummy_info["step"] = step + 1
+
+    check(len(actions) == 20, "Generated 20 real-time channel predictions")
+    check(all(0 <= a < 64 for a in actions), "All predictions in valid channel range [0, 63]")
+
+    # Test reset
+    interceptor.reset()
+    check(interceptor.current_tier == 1, "Tier reset to 1 after reset()")
+    check(interceptor.consecutive_misses == 0, "Misses reset to 0 after reset()")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 24: DETERMINISTIC POLICY EVALUATION INVARIANCE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_deterministic_evaluation():
+    test("Test 24: Deterministic Policy Evaluation Invariance")
+
+    agent = DRQNAgent(n_actions=64, device="cpu")
+    agent.set_eval_mode()
+
+    state = {
+        "sequence": torch.randn(10, 5),
+        "context": torch.randn(5),
+    }
+
+    # Evaluate multiple times with same input
+    actions = [agent.select_action(state, hidden=None, evaluate=True)[0] for _ in range(10)]
+    all_same = all(a == actions[0] for a in actions)
+    check(all_same, f"Deterministic evaluation produces identical actions across 10 trials: {actions[0]}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -646,6 +1077,18 @@ if __name__ == "__main__":
     test_epsilon_decay()
     test_full_integration()
     test_parameter_count()
+    test_production_checkpoint()
+    test_inference_latency()
+    test_edge_cases_and_robustness()
+    test_handoff_cooldown()
+    test_multi_batch_inference()
+    test_dueling_architecture_invariant()
+    test_replay_buffer_overflow_and_bounds()
+    test_target_network_isolation_and_polyak()
+    test_sensor_nan_inf_immunity()
+    test_handoff_multi_period_and_reacquisition()
+    test_cognitive_interceptor_api()
+    test_deterministic_evaluation()
 
     # Final verdict
     print(f"\n{'=' * 60}")

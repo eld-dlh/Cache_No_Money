@@ -18,6 +18,7 @@ from .drqn_network import DRQNNetwork
 from .replay_buffer import RecurrentReplayBuffer
 from .drqn_agent import DRQNAgent
 from .handoff_controller import HandoffController
+from .cognitive_interceptor import CognitiveInterceptor
 
 __all__ = [
     "StateBuilder",
@@ -25,4 +26,5 @@ __all__ = [
     "RecurrentReplayBuffer",
     "DRQNAgent",
     "HandoffController",
+    "CognitiveInterceptor",
 ]

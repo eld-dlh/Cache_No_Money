@@ -114,16 +114,19 @@ cd Cache_No_Money
 pip install -r requirements.txt
 ```
 
-### 2. Verify Pipeline (50 Unit Tests)
+### 2. Verify Pipeline (108 Unit & Hardening Checks)
 
 Run the synthetic unit test suite (requires no dataset download):
 
 ```bash
 python tests/test_drqn_pipeline.py
+# Or run complete test suite via pytest:
+pytest tests/ -v
 ```
 ```
-RESULTS: 50/50 checks passed
+RESULTS: 108/108 checks passed
 ✅ ALL TESTS PASSED — Person 3 pipeline is ready!
+============================= 28 passed in 4.67s ==============================
 ```
 
 ### 3. Generate Dataset Binary
@@ -148,60 +151,49 @@ python train_drqn.py --device auto --pretrain-epochs 5 --rl-steps 20000 --batch-
 
 ## 🤝 Handoff Guide for Person 4 (Systems Engineer)
 
-### 1. Loading the Trained Weights
+### 1. High-Level Unified API (`CognitiveInterceptor`)
 
-The production model weights are saved at [`checkpoints/drqn_radar_best.pt`](checkpoints/drqn_radar_best.pt) (approx. 7.7 MB):
+For seamless integration into real-time SDR receiver software, Person 3 provides the unified `CognitiveInterceptor` class:
+
+```python
+from models.cognitive_interceptor import CognitiveInterceptor
+
+# Initialize with trained production weights (Tier 1 + Tier 2 hybrid)
+interceptor = CognitiveInterceptor(weights_path="checkpoints/drqn_radar_best.pt")
+
+# In SDR real-time processing loop:
+# 1. Predict channel for next pulse (runs < 1.1 ms on CPU)
+channel = interceptor.predict_channel(obs_window, last_step_info)
+tune_sdr_frequency(channel)
+
+# 2. Provide intercept feedback
+interceptor.update_feedback(reward=+1.0, intercepted=True, pulse_channel=channel)
+
+# 3. Check telemetry status
+print(f"Active Tier: {interceptor.current_tier} | Locked: {interceptor.pattern_locked}")
+```
+
+### 2. Manual Component Loading (Alternative)
+
+If custom low-level control is preferred:
 
 ```python
 import torch
 from pathlib import Path
 from models.drqn_agent import DRQNAgent
 from models.state_builder import StateBuilder
+from models.handoff_controller import HandoffController
 
-# Initialize agent (64 frequency channels)
 agent = DRQNAgent(n_actions=64, device="cpu")
 agent.load(Path("checkpoints/drqn_radar_best.pt"), load_optimiser=False)
 agent.set_eval_mode()
 
 state_builder = StateBuilder(n_channels=64, max_steps=500)
+controller = HandoffController(pattern_lock_threshold=6, fallback_threshold=5, cooldown_steps=10)
 ```
 
-### 2. Real-Time Inference Step
-
-```python
-# Raw observation from SDR receiver: (10, 5) float32
-# Columns: [ToA_us, Frequency_MHz, PulseWidth_us, AoA_deg, Amplitude_dBm]
-state = state_builder.build_state(obs_window, last_step_info)
-
-# Action prediction (selects channel 0..63)
-action, _ = agent.select_action(state, hidden=None, evaluate=True)
-print(f"Tune receiver to channel: {action}")
-```
-
-### 3. Using the Handoff Controller
-
-To deploy the full hybrid Tier 1 ↔ Tier 2 system:
-
-```python
-from models.handoff_controller import HandoffController
-
-controller = HandoffController(
-    pattern_lock_threshold=6,
-    fallback_threshold=5,
-    cooldown_steps=10
-)
-
-# In your control loop:
-if controller.current_tier == 1:
-    action = bandit_policy.select_action()
-else:
-    action, _ = agent.select_action(state, hidden=None, evaluate=True)
-
-# Update controller with intercept outcome
-controller.update(intercepted=is_hit, channel=action)
-```
-
-### 4. Latency & Hardware Profile
+### 3. Latency & Hardware Profile
 * **Parameters:** 960,385 float32 weights.
-* **Inference Latency:** `< 1.2 ms` on modern multi-core CPU / embedded edge GPU (NVIDIA Jetson / x86 SDR host).
-* **Buffer Memory:** Clean stateless sliding window unroll (`hidden=None`) ensures zero hidden-state memory drift during multi-hour continuous missions.
+* **Inference Latency:** `1.01 ms` average (`1.42 ms` P95) on CPU / embedded SDR host.
+* **Sensor Robustness:** `StateBuilder` automatically sanitizes against hardware dropouts, NaNs, and Infs.
+* **Buffer Memory:** Clean stateless sliding window unroll (`hidden=None`) ensures zero hidden-state memory drift during multi-hour continuous EW missions.

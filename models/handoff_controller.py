@@ -181,6 +181,7 @@ class HandoffController:
                     self._pattern_locked = False
                     self._detected_period = None
                     self._steps_in_tier = 0
+                    self._channel_history.clear()
                     event = "REVERT_TO_TIER_1"
 
                     self._event_log.append({

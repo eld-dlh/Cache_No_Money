@@ -178,7 +178,9 @@ class StateBuilder:
         -------
         np.ndarray, shape (W, 5), values in [0, 1]
         """
-        result = obs.copy().astype(np.float32)
+        # Sanitize against hardware dropouts, sensor disconnects, NaNs, and Infs
+        sanitized = np.nan_to_num(obs, nan=0.0, posinf=1e5, neginf=-1e5).astype(np.float32)
+        result = sanitized.copy()
         W = result.shape[0]
 
         # ── Convert absolute ToA → ΔToA (inter-pulse interval)
@@ -272,17 +274,17 @@ class StateBuilder:
             [4] channel_occupancy_hist — fraction of quadrants with recent activity
         """
         # Feature 1: Recent hit rate (already in [0, 1] from EMA)
-        f_hit_rate = float(np.clip(self._recent_hit_rate, 0.0, 1.0))
+        f_hit_rate = float(np.nan_to_num(np.clip(self._recent_hit_rate, 0.0, 1.0), nan=0.0))
 
         # Feature 2: Consecutive misses, normalised by miss_cap
-        f_misses = float(min(self._consecutive_misses, self.miss_cap)) / self.miss_cap
+        f_misses = float(np.nan_to_num(min(self._consecutive_misses, self.miss_cap) / self.miss_cap, nan=0.0))
 
         # Feature 3: Last action channel, normalised to [0, 1]
-        f_last_action = float(self._last_action) / max(self.n_channels - 1, 1)
+        f_last_action = float(np.nan_to_num(self._last_action / max(self.n_channels - 1, 1), nan=0.0))
 
         # Feature 4: Dwell budget remaining (1.0 at start, 0.0 at end)
         f_budget = 1.0 - (float(self._current_step) / max(self.max_steps, 1))
-        f_budget = float(np.clip(f_budget, 0.0, 1.0))
+        f_budget = float(np.nan_to_num(np.clip(f_budget, 0.0, 1.0), nan=0.0))
 
         # Feature 5: Channel occupancy — what fraction of frequency quadrants
         # have had recent pulse activity
