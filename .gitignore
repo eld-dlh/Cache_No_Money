@@ -12,6 +12,10 @@ checkpoints/*
 !checkpoints/drqn_radar_best.pt
 !checkpoints/.gitkeep
 
+# ── Scratch & Temporary Debug Files ────────────────────────────
+scratch_*.py
+*.log
+
 # ── Python & Bytecode ─────────────────────────────────────────
 __pycache__/
 *.py[cod]
