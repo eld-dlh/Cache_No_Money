@@ -396,6 +396,25 @@ def run_rl_training(
     print(f"  Device:       {device}")
     print()
 
+    # ── Baseline evaluation before RL starts
+    print("  ── Evaluating baseline on test split...")
+    init_eval = evaluate_agent(
+        agent, npy_path,
+        n_episodes=eval_episodes,
+        max_steps=max_steps_per_episode,
+    )
+    best_eval_reward = init_eval["avg_episode_reward"]
+    agent.save(BEST_CKPT, eval_reward=best_eval_reward)
+    print(
+        f"     Baseline test hit_rate={init_eval['hit_rate']:.3f} | "
+        f"avg_ep_reward={best_eval_reward:.2f}"
+    )
+    print(f"     💾 Saved baseline checkpoint to {BEST_CKPT}\n")
+
+    history["eval_rewards"].append(best_eval_reward)
+    history["eval_hit_rates"].append(init_eval["hit_rate"])
+    history["eval_steps"].append(0)
+
     agent.set_train_mode()
     t_start = time.time()
 
@@ -631,13 +650,14 @@ def main():
     # Agent hyperparameters
     parser.add_argument("--lr", type=float, default=1e-4, help="RL learning rate.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
-    parser.add_argument("--eps-start", type=float, default=1.0, help="Initial epsilon.")
+    parser.add_argument("--eps-start", type=float, default=None, help="Initial epsilon (default: 0.25 if pre-trained, 1.0 if scratch).")
     parser.add_argument("--eps-end", type=float, default=0.05, help="Final epsilon.")
     parser.add_argument("--eps-decay", type=int, default=None, help="Epsilon decay steps (default: 65 percent of rl-steps).")
 
     args = parser.parse_args()
 
     eps_decay_steps = args.eps_decay if args.eps_decay is not None else max(5_000, int(args.rl_steps * 0.65))
+    eps_start = args.eps_start if args.eps_start is not None else (0.25 if not args.skip_pretrain else 1.0)
 
     # ── Resolve device
     if args.device == "auto":
@@ -654,7 +674,7 @@ def main():
     print(f"  Device:       {device}")
     print(f"  Pre-train:    {'skip' if args.skip_pretrain else f'{args.pretrain_epochs} epochs'}")
     print(f"  RL steps:     {args.rl_steps:,}")
-    print(f"  Eps decay:    {eps_decay_steps:,} steps ({args.eps_start} -> {args.eps_end})")
+    print(f"  Eps decay:    {eps_decay_steps:,} steps ({eps_start} -> {args.eps_end})")
     print(f"  Resume from:  {args.resume or 'scratch'}")
 
     # ── Check data file
@@ -671,7 +691,7 @@ def main():
         n_actions=N_CHANNELS,
         lr=args.lr,
         gamma=args.gamma,
-        epsilon_start=args.eps_start,
+        epsilon_start=eps_start,
         epsilon_end=args.eps_end,
         epsilon_decay_steps=eps_decay_steps,
         device=device,

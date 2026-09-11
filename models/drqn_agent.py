@@ -217,7 +217,9 @@ class DRQNAgent:
         seq = state["sequence"].unsqueeze(0).to(self.device)  # (1, W, 5)
         ctx = state["context"].unsqueeze(0).to(self.device)   # (1, C)
 
-        q_values, hidden = self.q_network(seq, ctx, hidden)
+        # In evaluation mode on full observation windows, process the window cleanly
+        h_in = None if evaluate else hidden
+        q_values, hidden = self.q_network(seq, ctx, h_in)
         action = q_values.argmax(dim=-1).item()
 
         return action, hidden

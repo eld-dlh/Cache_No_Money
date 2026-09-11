@@ -66,6 +66,9 @@ def generate_synthetic_h5_shards(
     with frequency-hopping patterns. Conforms exactly to the Turing dataset schema:
       - /data    : shape (N, 5) float32 [ToA, Frequency, PulseWidth, AoA, Amplitude]
       - /labels  : shape (N, 1) int32 [emitter_id]
+
+    Generates a coherent EW scenario where a persistent pool of emitters
+    transmit continuously across all shards, mirroring real radar missions.
     """
     print(f"\n📡 Generating {n_shards} synthetic radar .h5 shards in {output_dir}...")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -73,11 +76,38 @@ def generate_synthetic_h5_shards(
 
     rng = np.random.default_rng(42)
 
+    # Global pool of 8 distinct radar emitters with realistic radar parameters
+    n_global_emitters = 8
+    emitters = []
+    freq_step = 12000.0 / 64.0
+
+    for e_id in range(n_global_emitters):
+        pri = float(rng.uniform(80.0, 350.0))       # Pulse repetition interval (us)
+        pw = float(rng.uniform(1.0, 15.0))          # Pulse width (us)
+        aoa = float(rng.uniform(20.0, 340.0))       # Angle of arrival (degrees)
+        amp = float(rng.uniform(-65.0, -25.0))      # Amplitude (dBm)
+
+        # Cyclic frequency-hopping pattern (period 3-6 channels)
+        hop_period = int(rng.integers(3, 7))
+        hop_channels = rng.choice(64, size=hop_period, replace=False)
+        hop_freqs = hop_channels * freq_step + (freq_step / 2.0)
+
+        emitters.append({
+            "e_id": e_id,
+            "pri": pri,
+            "pw": pw,
+            "aoa": aoa,
+            "amp": amp,
+            "hop_period": hop_period,
+            "hop_channels": hop_channels,
+            "hop_freqs": hop_freqs,
+            "cur_toa": 0.0,
+            "hop_idx": 0,
+        })
+
     for shard_idx in range(n_shards):
         h5_path = output_dir / f"config_{shard_idx}.h5"
 
-        # Simulate 3-5 distinct emitters in this environment
-        n_emitters = rng.integers(3, 6)
         all_toas = []
         all_freqs = []
         all_pws = []
@@ -85,52 +115,46 @@ def generate_synthetic_h5_shards(
         all_amps = []
         all_labels = []
 
-        for e_id in range(n_emitters):
-            # Base parameters for this emitter
-            pri = rng.uniform(80.0, 350.0)       # Pulse repetition interval (us)
-            pw = rng.uniform(1.0, 15.0)          # Pulse width (us)
-            aoa = rng.uniform(20.0, 340.0)       # Angle of arrival (degrees)
-            amp = rng.uniform(-65.0, -25.0)      # Amplitude (dBm)
+        pulses_per_emitter = pulses_per_shard // n_global_emitters
 
-            # Hopping channel pattern (e.g., period of 3-6 channels)
-            hop_period = rng.integers(3, 7)
-            hop_channels = rng.choice(64, size=hop_period, replace=False)
-            # Map channel indices to frequencies in [500, 11500] MHz
-            freq_step = 12000.0 / 64.0
-            hop_freqs = hop_channels * freq_step + (freq_step / 2.0)
+        for e in emitters:
+            e_toas = []
+            e_freqs = []
+            t = e["cur_toa"]
+            h_idx = e["hop_idx"]
 
-            n_pulses_emitter = pulses_per_shard // n_emitters
-            emitter_toas = np.cumsum(rng.normal(pri, pri * 0.02, size=n_pulses_emitter))
-            emitter_freqs = np.array([hop_freqs[i % hop_period] for i in range(n_pulses_emitter)])
-            emitter_pws = rng.normal(pw, pw * 0.05, size=n_pulses_emitter)
-            emitter_aoas = rng.normal(aoa, 1.5, size=n_pulses_emitter) % 360.0
-            emitter_amps = rng.normal(amp, 2.0, size=n_pulses_emitter)
+            for _ in range(pulses_per_emitter):
+                t += max(10.0, float(rng.normal(e["pri"], e["pri"] * 0.02)))
+                e_toas.append(t)
+                e_freqs.append(e["hop_freqs"][h_idx % e["hop_period"]])
+                h_idx += 1
 
-            all_toas.append(emitter_toas)
-            all_freqs.append(emitter_freqs)
-            all_pws.append(emitter_pws)
-            all_aoas.append(emitter_aoas)
-            all_amps.append(emitter_amps)
-            all_labels.append(np.full(n_pulses_emitter, e_id, dtype=np.int32))
+            e["cur_toa"] = t
+            e["hop_idx"] = h_idx
 
-        toas = np.concatenate(all_toas)
-        freqs = np.clip(np.concatenate(all_freqs), 50.0, 11950.0)
-        pws = np.clip(np.concatenate(all_pws), 0.5, 50.0)
-        aoas = np.concatenate(all_aoas)
-        amps = np.concatenate(all_amps)
-        labels = np.concatenate(all_labels)
+            e_pws = rng.normal(e["pw"], e["pw"] * 0.05, size=pulses_per_emitter)
+            e_aoas = (rng.normal(e["aoa"], 1.5, size=pulses_per_emitter)) % 360.0
+            e_amps = rng.normal(e["amp"], 2.0, size=pulses_per_emitter)
+            e_labels = np.full(pulses_per_emitter, e["e_id"], dtype=np.int32)
+
+            all_toas.extend(e_toas)
+            all_freqs.extend(e_freqs)
+            all_pws.extend(e_pws)
+            all_aoas.extend(e_aoas)
+            all_amps.extend(e_amps)
+            all_labels.extend(e_labels)
 
         # Sort all interleaved pulses chronologically by ToA
-        sort_order = np.argsort(toas)
+        sort_order = np.argsort(all_toas)
         data_matrix = np.column_stack([
-            toas[sort_order],
-            freqs[sort_order],
-            pws[sort_order],
-            aoas[sort_order],
-            amps[sort_order],
+            np.array(all_toas)[sort_order],
+            np.clip(np.array(all_freqs)[sort_order], 50.0, 11950.0),
+            np.clip(np.array(all_pws)[sort_order], 0.5, 50.0),
+            np.array(all_aoas)[sort_order],
+            np.array(all_amps)[sort_order],
         ]).astype(np.float32)
 
-        label_matrix = labels[sort_order].reshape(-1, 1).astype(np.int32)
+        label_matrix = np.array(all_labels)[sort_order].reshape(-1, 1).astype(np.int32)
 
         with h5py.File(h5_path, "w") as f:
             f.create_dataset("data", data=data_matrix)
