@@ -547,12 +547,17 @@ def run_rl_training(
     print(f"  Total training updates:    {agent._train_step_count:,}")
     print(f"  Final epsilon:             {agent.epsilon:.4f}")
 
-    elapsed = time.time() - t_start
-    print(f"  Wall time:                 {elapsed:.1f}s")
+    # ── Save checkpoints
+    final_ckpt = CHECKPOINT_DIR / "drqn_radar_final.pt"
+    agent.save(final_ckpt, eval_reward=final_eval["avg_episode_reward"])
+    print(f"\n  💾 Final checkpoint saved to {final_ckpt}")
 
-    # Save final checkpoint
-    agent.save(BEST_CKPT, eval_reward=final_eval["avg_episode_reward"])
-    print(f"\n  💾 Final checkpoint saved to {BEST_CKPT}")
+    if final_eval["avg_episode_reward"] > best_eval_reward:
+        best_eval_reward = final_eval["avg_episode_reward"]
+        agent.save(BEST_CKPT, eval_reward=best_eval_reward)
+        print(f"  💾 Final model is a new best! Saved to {BEST_CKPT}")
+    else:
+        print(f"  ℹ️  Preserved best checkpoint ({best_eval_reward:.2f}) at {BEST_CKPT}")
 
     return history
 
@@ -628,9 +633,11 @@ def main():
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor.")
     parser.add_argument("--eps-start", type=float, default=1.0, help="Initial epsilon.")
     parser.add_argument("--eps-end", type=float, default=0.05, help="Final epsilon.")
-    parser.add_argument("--eps-decay", type=int, default=20_000, help="Epsilon decay steps.")
+    parser.add_argument("--eps-decay", type=int, default=None, help="Epsilon decay steps (default: 65 percent of rl-steps).")
 
     args = parser.parse_args()
+
+    eps_decay_steps = args.eps_decay if args.eps_decay is not None else max(5_000, int(args.rl_steps * 0.65))
 
     # ── Resolve device
     if args.device == "auto":
@@ -647,6 +654,7 @@ def main():
     print(f"  Device:       {device}")
     print(f"  Pre-train:    {'skip' if args.skip_pretrain else f'{args.pretrain_epochs} epochs'}")
     print(f"  RL steps:     {args.rl_steps:,}")
+    print(f"  Eps decay:    {eps_decay_steps:,} steps ({args.eps_start} -> {args.eps_end})")
     print(f"  Resume from:  {args.resume or 'scratch'}")
 
     # ── Check data file
@@ -665,7 +673,7 @@ def main():
         gamma=args.gamma,
         epsilon_start=args.eps_start,
         epsilon_end=args.eps_end,
-        epsilon_decay_steps=args.eps_decay,
+        epsilon_decay_steps=eps_decay_steps,
         device=device,
     )
 
