@@ -26,9 +26,14 @@ This module provides:
 from __future__ import annotations
 
 import os
+import sys
 import time
 import tracemalloc
 from pathlib import Path
+
+# Fix Windows terminal encoding
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 

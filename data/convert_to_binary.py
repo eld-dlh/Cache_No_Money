@@ -30,7 +30,12 @@ Record layout (32 bytes = 8 × float32):
   [7]  reserved_2   (zero)  — could store train_id later
 """
 
+import sys
 from pathlib import Path
+
+# Fix Windows terminal encoding
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 import pandas as pd
@@ -82,6 +87,7 @@ def convert_to_binary(
 
     # Check if train_id is present
     train_ids = None
+
     if "train_id" in pdw_df.columns:
         train_ids = pdw_df["train_id"].values.astype(np.float32)
         print(f"   Found train_id column — will store in field [6]")
@@ -91,6 +97,7 @@ def convert_to_binary(
         raise ValueError("Missing 'emitter_id' column in input Parquet. Required for NPY field [7].")
     emitter_ids = pdw_df["emitter_id"].values.astype(np.float32)
     print(f"   Found emitter_id column — will store in field [7]")
+
 
     # Allocate the full output array in memory
     # Shape: (N, 8) — N records, 8 float32 values each
